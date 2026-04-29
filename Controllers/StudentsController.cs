@@ -76,7 +76,13 @@ public class StudentsController(IConfiguration config) : ControllerBase
         cmd.Parameters.AddWithValue("@Course", student.Course);
         cmd.Parameters.AddWithValue("@Marks", student.Marks);
 
-        student.Id = (int)await cmd.ExecuteScalarAsync();
+        var newId = await cmd.ExecuteScalarAsync();
+        if (newId is null || newId == DBNull.Value)
+        {
+            return BadRequest("Could not create student.");
+        }
+
+        student.Id = Convert.ToInt32(newId);
         return CreatedAtAction(nameof(GetById), new { id = student.Id }, student);
     }
 
@@ -97,22 +103,82 @@ public class StudentsController(IConfiguration config) : ControllerBase
         return rows == 0 ? NotFound() : NoContent();
     }
 
+    public async Task<bool> UpdateGrade(int id, Student updated)
+    {
+        using var conn = new SqlConnection(_connectionString);
+        await conn.OpenAsync();
+
+        using var cmd = new SqlCommand(
+            "UPDATE Students SET Grade = @Grade WHERE Id = @Id", conn);
+        cmd.Parameters.AddWithValue("@Id", id);
+        cmd.Parameters.AddWithValue("@Grade", updated.Grade);
+
+        var rows = await cmd.ExecuteNonQueryAsync();
+        return rows > 0;
+    }
+
     [HttpPost("calculate-grades")]
     public async Task<ActionResult<List<Student>>> CalculateGrades()
     {
         var studentsWithGrade = new List<Student>();
+        var students = await GetAll();
+        if (students.Value == null) return NotFound();
 
-        // Write code to calculate and update grades
+        foreach (var student in students.Value)
+        {
+            student.Grade = GetGrade(student.Marks);
+            var updateSuccess = await UpdateGrade(student.Id, student);
 
-        return studentsWithGrade;
+            if(!updateSuccess){
+                Console.WriteLine($"Failed to update grade for student with ID {student.Id}");
+            } else{
+                studentsWithGrade.Add(student);
+            }
+        }
+
+        return studentsWithGrade;   
     }
 
+
+    
     [HttpGet("report")]
-    public async Task<IActionResult> Report()
+public async Task<IActionResult> Report()
+{
+    var reports = new List<CourseReport>();
+    using var conn = new SqlConnection(_connectionString);
+    await conn.OpenAsync();
+
+    using var cmd = new SqlCommand(@"
+        SELECT Course, 
+            COUNT(*) as TotalStudents, 
+            AVG(CAST(Marks AS FLOAT)) as AverageMarks, 
+            SUM(CASE WHEN Marks >= 90 THEN 1 ELSE 0 END) as A,
+            SUM(CASE WHEN Marks >= 80 AND Marks < 90 THEN 1 ELSE 0 END) as B,
+            SUM(CASE WHEN Marks >= 60 AND Marks < 80 THEN 1 ELSE 0 END) as C,
+            SUM(CASE WHEN Marks < 60 THEN 1 ELSE 0 END) as D
+        FROM Students 
+        GROUP BY Course", conn);
+
+    using var reader = await cmd.ExecuteReaderAsync();
+    while (await reader.ReadAsync())
     {
-        // Write code for the report generation logic.
-        return Ok();
+        reports.Add(new CourseReport
+        {
+            CourseName = reader.GetString(0),
+            TotalStudents = reader.GetInt32(1),
+            AverageMarks = reader.GetDouble(2),
+            GradeDistribution = new GradeDistribution
+            {
+                A = reader.GetInt32(3),
+                B = reader.GetInt32(4),
+                C = reader.GetInt32(5),
+                D = reader.GetInt32(6)
+            }
+        });
     }
+
+    return Ok(reports);
+}
 
     [HttpDelete("{id}")]
     public async Task<IActionResult> Delete(int id)

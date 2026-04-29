@@ -1,0 +1,6 @@
+{
+  "[csharp]": {
+    "editor.suggest.showSnippets": true,
+    "editor.suggest.showInlineDetails": false
+  }
+}
